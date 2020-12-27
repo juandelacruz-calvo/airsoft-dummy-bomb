@@ -1,83 +1,270 @@
 #include <Arduino.h>
-#include <Ticker.h>
-#include <SdFat.h>
-SdFat sd;
+#include <SPI.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
 
-#define SDFAT_FILE_TYPE 3
-#define SD_CHIP_SELECT_PIN 10
+#define SCREEN_WIDTH 128 // OLED display width, in pixels
+#define SCREEN_HEIGHT 64 // OLED display height, in pixels
 
-#include <TMRpcm.h> //  also need to include this library...
-#include <Keypad.h>
+void printMainMenu();
+void bigTextLine(String line, int x, int y);
+void smallTextLine(String line, int x, int y);
+void applyAction(char action);
+void applyMainMenuLevelAction(char action);
+void applySearchDestroyLevelAction(char action);
+void applySabotageMenuLevelAction(char action);
+void applyDominationLevelAction(char action);
+void applySetupLevelAction(char action);
+void requestGameTime();
+void requestDefuseTime();
+void requestDefuseCode();
+void triggerGameStart();
+void countdown();
+String awaitForInput();
+void awaitOkCancel();
+boolean inputAvailable();
+char readCharacter();
+void (*resetFunc)(void) = 0; // Reset Arduino
 
-void plantedBomb();
-void beepBomb();
+// Declaration for an SSD1306 display connected to I2C (SDA, SCL pins)
+#define OLED_RESET -1 // Reset pin # (or -1 if sharing Arduino reset pin)
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
-const byte ROWS = 4;  //four rows
-const byte COLS = 4;  //four columns
-const int buzzer = 9; //buzzer to arduino pin 9
+enum MenuLevel
+{
+  MAIN,
+  SEARCH_DESTROY,
+  SABOTAGE,
+  DOMINATION,
+  SETUP
+};
 
-char keys[ROWS][COLS] = {
-    {'1', '2', '3', 'A'},
-    {'4', '5', '6', 'B'},
-    {'7', '8', '9', 'C'},
-    {'*', '0', '#', 'D'}};
-
-byte rowPins[ROWS] = {4, 3, 2, 0}; //connect to the row pinouts of the keypad
-byte colPins[COLS] = {8, 7, 6, 5}; //connect to the column pinouts of the keypad
-
-// //Create an object of keypad
-Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
-
-TMRpcm audio; // create an object for use in this sketch
-Ticker ticker(plantedBomb, 50000, 0, MILLIS);
+MenuLevel menuLevel = MAIN;
+int gameLength;
+int disarmtimeLength;
+String defuseCode;
 
 void setup()
 {
-  // pinMode(buzzer, OUTPUT); // Set buzzer - pin 9 as an output
+  Serial.begin(115200);
 
-  Serial.begin(9600);
-  Serial.println("inicio");
-  audio.speakerPin = buzzer; //5,6,11 or 46 on Mega, 9 on Uno, Nano, etc
-
-  if (!sd.begin(SD_CHIP_SELECT_PIN))
+  // SSD1306_SWITCHCAPVCC = generate display voltage from 3.3V internally
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C))
   {
-    Serial.println("SD error");
-    return;
-  }
-  else
-  {
-    Serial.println("SD OK");
+    Serial.println(F("SSD1306 allocation failed"));
+    for (;;)
+      ; // Don't proceed, loop forever
   }
 
-  ticker.start();
+  // display.display() is NOT necessary after every single drawing command,
+  // unless that's what you want...rather, you can batch up a bunch of
+  // drawing operations and then update the screen all at once by calling
+  // display.display(). These examples demonstrate both approaches...
+
+  printMainMenu(); // Draw scrolling text
 }
 
 void loop()
 {
-  ticker.update();
-  Serial.println("loop");
- 
-  delay(5000);       // ...for 1s
-
-  char key = keypad.getKey(); // Read the key
-
-  // Print if key pressed
-  if (key)
+  if (inputAvailable())
   {
-    Serial.print("Key Pressed : ");
-    Serial.println(key);
+    applyAction(readCharacter());
   }
 }
 
-void plantedBomb()
+boolean inputAvailable()
 {
-  Serial.println("timer");
-  audio.play("planted.wav");
+  return Serial.available() > 0;
 }
 
-void beepBomb()
+char readCharacter()
 {
- tone(buzzer, 4435); // Send 1KHz sound signal...
-  delay(80);          // ...for 1 sec
-  noTone(buzzer);     // Stop sound...
+  char obtained = Serial.read();
+  Serial.print(obtained);
+  return obtained;
+}
+
+void printMainMenu()
+{
+  menuLevel = MAIN;
+  display.clearDisplay();
+  bigTextLine(F("1.Sear&Des"), 0, 0);
+  bigTextLine(F("2.Sabotage"), 0, 16);
+  bigTextLine(F("3.Dominati"), 0, 32);
+  bigTextLine(F("4.Setup"), 0, 48);
+}
+
+void bigTextLine(String line, int x, int y)
+{
+  display.setTextSize(2); // Draw 2X-scale text
+  display.setTextColor(WHITE);
+  display.setCursor(x, y);
+  display.println(line);
+  display.display(); // Show initial text
+}
+
+void smallTextLine(String line, int x, int y)
+{
+  display.setTextSize(1); // Draw 2X-scale text
+  display.setTextColor(WHITE);
+  display.setCursor(x, y);
+  display.println(line);
+  display.display(); // Show initial text
+}
+
+void applyAction(char action)
+{
+  switch (menuLevel)
+  {
+  case MAIN:
+    applyMainMenuLevelAction(action);
+    break;
+  case SEARCH_DESTROY:
+    applySearchDestroyLevelAction(action);
+    break;
+  case SABOTAGE:
+    applySabotageMenuLevelAction(action);
+    break;
+  case DOMINATION:
+    applyDominationLevelAction(action);
+    break;
+  case SETUP:
+    applySetupLevelAction(action);
+    break;
+  }
+}
+
+void applyMainMenuLevelAction(char action)
+{
+  switch (action)
+  {
+  case '1':
+    menuLevel = SEARCH_DESTROY;
+    requestGameTime();
+    requestDefuseTime();
+    requestDefuseCode();
+    triggerGameStart();
+  }
+}
+
+void requestGameTime()
+{
+  display.clearDisplay();
+  bigTextLine(F("Countdown?"), 0, 0);
+  smallTextLine(F("Game length in minutes then press #, or cancel with *"), 0, 16);
+  gameLength = awaitForInput().toInt();
+}
+
+void requestDefuseTime()
+{
+  display.clearDisplay();
+  bigTextLine(F("Defuse?"), 0, 0);
+  smallTextLine(F("Defuse time in seconds then press #, or cancel with *"), 0, 16);
+  disarmtimeLength = awaitForInput().toInt();
+}
+
+void requestDefuseCode()
+{
+  display.clearDisplay();
+  bigTextLine(F("Code?"), 0, 0);
+  smallTextLine(F("Insert defuse code then press #, or cancel with *"), 0, 16);
+  defuseCode = awaitForInput();
+}
+
+void triggerGameStart()
+{
+  display.clearDisplay();
+  bigTextLine(F("Start?"), 0, 0);
+  bigTextLine(F("# OK"), 0, 16);
+  bigTextLine(F("* Cancel"), 0, 32);
+  awaitOkCancel();
+  countdown();
+}
+
+String awaitForInput()
+{
+  String input;
+  do
+  {
+
+    if (inputAvailable())
+    {
+      char read = readCharacter();
+
+      if (read == '*')
+      {
+        resetFunc();
+      }
+      else if (read == '#')
+      {
+        Serial.print(F("Input read: "));
+        Serial.println(input);
+        return input;
+      }
+
+      input += read;
+      bigTextLine(input, 0, 48);
+    }
+  } while (true);
+}
+
+void awaitOkCancel()
+{
+  do
+  {
+    if (inputAvailable())
+    {
+      char read = readCharacter();
+
+      if (read == '*')
+      {
+        resetFunc();
+      }
+      else if (read == '#')
+      {
+        return;
+      }
+    }
+  } while (true);
+}
+
+void countdown()
+{
+  display.clearDisplay();
+  Serial.println(F("Starting game"));
+  int countdownTime = 10000;
+  int initialMillis = millis();
+  int endMillis = initialMillis + countdownTime;
+  int displayedSecond = 10;
+  int currentSecond;
+  while (true)
+  {
+
+    if (millis() - initialMillis > countdownTime)
+    {
+      return;
+    }
+
+    int currentSecond = (endMillis - millis()) / 1000;
+
+    if (currentSecond != displayedSecond)
+    {
+      display.clearDisplay();
+      bigTextLine(String(currentSecond), 60, 32);
+    }
+  }
+}
+
+void applySearchDestroyLevelAction(char action)
+{
+}
+void applySabotageMenuLevelAction(char action)
+{
+}
+void applyDominationLevelAction(char action)
+{
+}
+void applySetupLevelAction(char action)
+{
 }
