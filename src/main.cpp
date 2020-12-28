@@ -41,6 +41,7 @@ enum MenuLevel
 };
 
 MenuLevel menuLevel = MAIN;
+int runLevel = 0;
 int gameLength;
 int disarmtimeLength;
 String defuseCode;
@@ -53,14 +54,8 @@ void setup()
   if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C))
   {
     Serial.println(F("SSD1306 allocation failed"));
-    for (;;)
-      ; // Don't proceed, loop forever
+    resetFunc();
   }
-
-  // display.display() is NOT necessary after every single drawing command,
-  // unless that's what you want...rather, you can batch up a bunch of
-  // drawing operations and then update the screen all at once by calling
-  // display.display(). These examples demonstrate both approaches...
 
   printMainMenu(); // Draw scrolling text
 }
@@ -71,6 +66,12 @@ void loop()
   {
     applyAction(readCharacter());
   }
+  
+  if (runLevel == 1) {
+    
+    // Start game
+  }
+
 }
 
 boolean inputAvailable()
@@ -142,6 +143,7 @@ void applyMainMenuLevelAction(char action)
   case '1':
     menuLevel = SEARCH_DESTROY;
     requestGameTime();
+    // requestBombExplosionTime();
     requestDefuseTime();
     requestDefuseCode();
     triggerGameStart();
@@ -238,7 +240,8 @@ void countdown()
   int endMillis = initialMillis + countdownTime;
   int displayedSecond = 10;
   int currentSecond;
-  while (true)
+  boolean finished = false;
+  while (!finished)
   {
 
     if (millis() - initialMillis > countdownTime)
@@ -248,12 +251,25 @@ void countdown()
 
     int currentSecond = (endMillis - millis()) / 1000;
 
-    if (currentSecond != displayedSecond)
+    if (displayedSecond != currentSecond)
     {
+      displayedSecond = currentSecond;
       display.clearDisplay();
       bigTextLine(String(currentSecond), 60, 32);
     }
+
+    // Serial.print(F("Current second: "));
+    // Serial.println(currentSecond);
+    // Serial.println(currentSecond == 1);
+
+    if (currentSecond == 0)
+    {
+      finished = true;
+    }
   }
+  
+  display.clearDisplay();
+  bigTextLine(F("GO!"), 60, 32);
 }
 
 void applySearchDestroyLevelAction(char action)
