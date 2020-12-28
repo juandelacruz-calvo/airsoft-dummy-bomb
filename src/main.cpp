@@ -143,7 +143,7 @@ void loop()
     noC4BombTone();
     playBombExplosion();
     delay(3000);
-    audio.play("ctwin-15.wav");
+    audio.play("terwin-15.wav");
     display.clear();
     bigTextLine(F(""), 10, 20);
     bigTextLine(F("GAME OVER"), 10, 20);
@@ -305,6 +305,7 @@ String awaitForInput()
 
     if (inputAvailable())
     {
+      audio.play("nvg_off-15db.wav");
       char read = readCharacter();
 
       if (read == '*')
@@ -331,6 +332,7 @@ void awaitOkCancel()
   {
     if (inputAvailable())
     {
+      audio.play("nvg_off-15db.wav");
       char read = readCharacter();
 
       if (read == '*')
