@@ -175,6 +175,9 @@ void loop()
     bigTextLine(F(""), 10, 20);
     bigTextLine(F("Terrorist"), 10, 20);
     bigTextLine(F("WIN"), 50, 20);
+
+    audio.play("c4_explode1-5db.wav");
+    delay(3000);
     audio.play("terwin-15.wav");
 
     runlevel = END;
@@ -243,7 +246,7 @@ void applyMainMenuLevelAction(char action)
     requestBombExplosionTime();
     requestDefuseTime();
     triggerGameStart();
-
+    playBombHasBeenPlanted();
     runlevel = PLANTED;
 
     millisExplosionFinish = (explosionTimeLengthMinutes * 60L * 1000L) + millis();
@@ -447,11 +450,12 @@ void playBombHasBeenPlanted()
   Serial.println(F("Bomb has been planted"));
 #endif
   audio.play("bombpl-15db.wav");
+  delay(1500);
 }
 
 void beepBomb()
 {
-  if (bombBeep)
+  if (bombBeep && runlevel == PLANTED)
   {
     tone(SPEAKER_PIN, 4186); // C8
   }
@@ -550,7 +554,6 @@ void explodingCallback()
 
       runlevel = EXPLODED; // The game is over
       stopTimers();
-      audio.play("c4_explode1-5db.wav");
     }
   }
 }
@@ -586,9 +589,9 @@ void defusingActionTrigger()
 #endif
 
     runlevel = DEFUSING;
+    audio.play("c4_disarm-15db.wav");
     millisDefuseFinish = millis() + (defusingTimeLengthSeconds * 1000L);
     defusingTicker.start();
-    audio.play("c4_disarm-15db.wav");
   }
 }
 
