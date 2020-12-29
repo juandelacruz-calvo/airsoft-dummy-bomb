@@ -5,7 +5,7 @@
 #include "SSD1306AsciiAvrI2c.h"
 #include <Ticker.h>
 
-#define DEBUG true
+#define DEBUG false
 
 #if DEBUG
 #include "MemoryFree.h"
@@ -34,9 +34,7 @@ String awaitForInput();
 void awaitOkCancel();
 boolean inputAvailable();
 char readCharacter();
-void playBombHasBeenPlanted();
 void beepBomb();
-void noC4BombTone();
 void updateGameTime();
 void defusingCallback();
 void explodingCallback();
@@ -73,7 +71,6 @@ enum Runtime
 
 TMRpcm audio; // create an object for use in this sketch
 Ticker beepBombTicker(beepBomb, 3000, 0, MILLIS);
-Ticker noToneBombTicker(noC4BombTone, 3000, 0, MILLIS);
 Ticker updateGameTimeTicker(updateGameTime, 1000, 0, MILLIS);
 Ticker defusingTicker(defusingCallback, 1000, 0, MILLIS);
 Ticker explodingTicker(explodingCallback, 1000, 0, MILLIS);
@@ -142,7 +139,6 @@ void loop()
   }
 
   beepBombTicker.update();
-  noToneBombTicker.update();
   updateGameTimeTicker.update();
   defusingTicker.update();
   explodingTicker.update();
@@ -162,7 +158,6 @@ void loop()
     bigTextLine(F(""), 10, 20);
     bigTextLine(F("Counter"), 30, 20);
     bigTextLine(F("WIN"), 50, 20);
-    noC4BombTone();
     audio.play("bombdef-15db.wav");
     delay(2500);
     audio.play("ctwin-15.wav");
@@ -176,7 +171,7 @@ void loop()
     bigTextLine(F("Terrorist"), 10, 20);
     bigTextLine(F("WIN"), 50, 20);
 
-    audio.play("c4_explode1-5db.wav");
+    audio.play("new_bomb_explosion-5db.wav");
     delay(3000);
     audio.play("terwin-15.wav");
 
@@ -223,6 +218,7 @@ void smallTextLine(String line, int x, int y)
 
 void applyAction(char action)
 {
+  audio.play("nvg_off-15db.wav");
   switch (menuLevel)
   {
   case MAIN:
@@ -246,16 +242,14 @@ void applyMainMenuLevelAction(char action)
     requestBombExplosionTime();
     requestDefuseTime();
     triggerGameStart();
-    playBombHasBeenPlanted();
     runlevel = PLANTED;
 
     millisExplosionFinish = (explosionTimeLengthMinutes * 60L * 1000L) + millis();
     bombBeep = true;
     explodingTicker.start();
     beepBombTicker.start();
-    delay(128);
-    noToneBombTicker.start();
-
+    audio.play("bombpl-15db.wav");
+    delay(1500);
     break;
 
   case '2':
@@ -271,8 +265,6 @@ void applyMainMenuLevelAction(char action)
     bombBeep = true;
     updateGameTimeTicker.start();
     beepBombTicker.start();
-    delay(128);
-    noToneBombTicker.start();
     break;
   }
 }
@@ -444,28 +436,11 @@ void countdown()
   bigTextLine(F("GO!"), 55, 32);
 }
 
-void playBombHasBeenPlanted()
-{
-#if DEBUG
-  Serial.println(F("Bomb has been planted"));
-#endif
-  audio.play("bombpl-15db.wav");
-  delay(1500);
-}
-
 void beepBomb()
 {
   if (bombBeep && runlevel == PLANTED)
   {
-    tone(SPEAKER_PIN, 4186); // C8
-  }
-}
-
-void noC4BombTone()
-{
-  if (bombBeep)
-  {
-    noTone(SPEAKER_PIN); // Stop sound...
+    tone(SPEAKER_PIN, 4186, 120); // C8
   }
 }
 
@@ -541,6 +516,19 @@ void explodingCallback()
     Serial.println(timeLeft);
 #endif
 
+    if (timeLeft >= 15 && timeLeft <= 30)
+    {
+      beepBombTicker.interval(1000);
+    }
+    else if (timeLeft > 5 && timeLeft <= 15)
+    {
+      beepBombTicker.interval(500);
+    }
+    else if (timeLeft <= 5)
+    {
+      beepBombTicker.interval(250);
+    }
+
     if (timeLeft > 0)
     {
       displayCountdown(timeLeft, F("Explosion"), 20, F("in"), 60);
@@ -549,7 +537,7 @@ void explodingCallback()
     {
 
 #if DEBUG
-      Serial.println(F("Exploded "));
+      Serial.println(F("Exploded"));
 #endif
 
       runlevel = EXPLODED; // The game is over
@@ -574,8 +562,6 @@ void plantBombActionTrigger()
 #endif
 
   explodingTicker.start();
-  audio.play("c4_plant-15db.wav");
-  delay(150);
   audio.play("bombpl-15db.wav");
 }
 
@@ -612,7 +598,6 @@ void stopTimers()
 {
   updateGameTimeTicker.stop();
   beepBombTicker.stop();
-  noToneBombTicker.stop();
   defusingTicker.stop();
   explodingTicker.stop();
 }
