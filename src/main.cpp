@@ -153,7 +153,7 @@ void loop()
   case TIME_OVER:
     display.clear();
     bigTextLine(F(""), 10, 20);
-    bigTextLine(F("GAME OVER"), 10, 20);
+    bigTextLine(F("TIME OVER"), 10, 20);
     runlevel = END;
     break;
 
@@ -332,6 +332,8 @@ void triggerGameStart()
   Serial.println((gameLengthMinutes * 60));
 
 #endif
+
+  audio.play("com_go-15.wav");
 }
 
 String awaitForInput()
@@ -451,7 +453,7 @@ void beepBomb()
 {
   if (bombBeep)
   {
-    tone(SPEAKER_PIN, 4186); // Send 1KHz sound signal...
+    tone(SPEAKER_PIN, 4186); // C8
   }
 }
 
@@ -467,7 +469,6 @@ void updateGameTime()
 {
   if (runlevel == PLAYING)
   {
-    // TODO this is a whole method
     int timeLeft = (millisGameFinish - millis()) / 1000L;
     if (timeLeft > 0)
     {
