@@ -1,11 +1,13 @@
+#include <main.h>
 #include <Arduino.h>
 #include <SPI.h>
 #include <Wire.h>
 #include "SSD1306Ascii.h"
 #include "SSD1306AsciiAvrI2c.h"
 #include <Ticker.h>
+#include <TM1637.h>
 
-#define DEBUG false
+#define DEBUG true
 
 #if DEBUG
 #include "MemoryFree.h"
@@ -17,34 +19,6 @@ SdFat sd;
 
 #include <TMRpcm.h>
 
-void printMainMenu();
-void bigTextLine(String line, int x, int y);
-void smallTextLine(String line, int x, int y);
-void applyAction(char action);
-void applyMainMenuLevelAction(char action);
-void applySearchDestroyLevelAction(char action);
-void applySabotageMenuLevelAction(char action);
-void requestGameTime();
-void requestDefuseTime();
-void requestBombExplosionTime();
-void requestDefuseCode();
-void triggerGameStart();
-void countdown();
-String awaitForInput();
-void awaitOkCancel();
-boolean inputAvailable();
-char readCharacter();
-void beepBomb();
-void updateGameTime();
-void defusingCallback();
-void explodingCallback();
-void plantBombActionTrigger();
-void cancelDefusingActionTrigger();
-void defusingActionTrigger();
-void stopTimers();
-void displayCountdown(int timeLeft, String firstLine, int firstLineX, String secondLine, int secondLineX);
-void (*resetFunc)(void) = 0; // Reset Arduino
-
 enum MenuLevel
 {
   MAIN,
@@ -55,6 +29,7 @@ enum MenuLevel
 enum Runtime
 {
   PLAYING,
+  PLANTING,
   PLANTED,
   EXPLODED,
   DEFUSING,
@@ -64,15 +39,21 @@ enum Runtime
 };
 
 #define SDFAT_FILE_TYPE 3
+
 #define SD_CHIP_SELECT_PIN 10
-#define SCREEN_WIDTH 128 // OLED display width, in pixels
-#define SCREEN_HEIGHT 64 // OLED display height, in pixels
-#define SPEAKER_PIN 9    // OLED display height, in pixels
+#define SPEAKER_PIN 9
+#define LED_SCREEN_CLK_PIN 2
+#define LED_SCREEN_DIO_PIN 3
+#define DEFUSE_BUTTON_PIN A1
+#define PLANT_BUTTON_PIN A2
+
+TM1637 led4DigitDisplay(LED_SCREEN_CLK_PIN, LED_SCREEN_DIO_PIN);
 
 TMRpcm audio; // create an object for use in this sketch
 Ticker beepBombTicker(beepBomb, 3000, 0, MILLIS);
 Ticker updateGameTimeTicker(updateGameTime, 1000, 0, MILLIS);
 Ticker defusingTicker(defusingCallback, 1000, 0, MILLIS);
+Ticker plantingTicker(plantingCallback, 1000, 0, MILLIS);
 Ticker explodingTicker(explodingCallback, 1000, 0, MILLIS);
 
 // Declaration for an SSD1306 display connected to I2C (SDA, SCL pins)
@@ -83,22 +64,34 @@ Runtime runlevel;
 boolean bombBeep = false;
 int gameLengthMinutes;
 int defusingTimeLengthSeconds;
+int plantingTimeLengthSeconds;
 int explosionTimeLengthMinutes;
 String defuseCode;
 
 long millisGameFinish;
 long millisDefuseFinish;
+long millisPlantingFinish;
 long millisExplosionFinish;
+
+int defuseButtonPushed = 0;
+int plantButtonPushed = 0;
 
 void setup()
 {
+  pinMode(LED_BUILTIN, OUTPUT);
+  pinMode(DEFUSE_BUTTON_PIN, INPUT);
+  pinMode(PLANT_BUTTON_PIN, INPUT);
 
 #if DEBUG
   Serial.begin(115200);
+  Serial.println(F("Initialisating"));
 #endif
 
   display.begin(&Adafruit128x64, 0x3C);
   display.setFont(Adafruit5x7);
+
+  led4DigitDisplay.set();
+  led4DigitDisplay.init();
 
 #if DEBUG
   Serial.println(freeMemory(), DEC);
@@ -138,26 +131,27 @@ void loop()
     applyAction(readCharacter());
   }
 
+  updateButtonStatuses();
+
   beepBombTicker.update();
   updateGameTimeTicker.update();
   defusingTicker.update();
   explodingTicker.update();
+  plantingTicker.update();
 
   switch (runlevel)
   {
 
   case TIME_OVER:
-    display.clear();
-    bigTextLine(F(""), 10, 20);
-    bigTextLine(F("TIME OVER"), 10, 20);
+
+    displayLinesInDisplay(F(""), 0, F("TIME OVER"), 10, F(""), 20, F(""), 30);
+
     runlevel = END;
     break;
 
   case DEFUSED:
-    display.clear();
-    bigTextLine(F(""), 10, 20);
-    bigTextLine(F("Counter"), 30, 20);
-    bigTextLine(F("WIN"), 50, 20);
+
+    displayLinesInDisplay(F(""), 0, F("Counter"), 30, F("WIN"), 50, F(""), 30);
     audio.play("bombdef-15db.wav");
     delay(2500);
     audio.play("ctwin-15.wav");
@@ -166,17 +160,47 @@ void loop()
     break;
 
   case EXPLODED:
-    display.clear();
-    bigTextLine(F(""), 10, 20);
-    bigTextLine(F("Terrorist"), 10, 20);
-    bigTextLine(F("WIN"), 50, 20);
-
+    displayLinesInDisplay(F(""), 0, F("Terrorist"), 10, F("WIN"), 50, F(""), 30);
     audio.play("new_bomb_explosion-5db.wav");
     delay(3000);
     audio.play("terwin-15.wav");
 
     runlevel = END;
     break;
+  }
+}
+
+void updateButtonStatuses()
+{
+
+  int defuseValue = digitalRead(DEFUSE_BUTTON_PIN);
+  if (defuseValue != defuseButtonPushed)
+  {
+    defuseButtonPushed = defuseValue;
+
+    if (defuseButtonPushed)
+    {
+      defusingActionTrigger();
+    }
+    else
+    {
+      cancelDefusingActionTrigger();
+    }
+  }
+
+  int planting = digitalRead(PLANT_BUTTON_PIN);
+  if (planting != plantButtonPushed)
+  {
+    plantButtonPushed = planting;
+
+    if (plantButtonPushed)
+    {
+      plantBombActionTrigger();
+    }
+    else
+    {
+      cancelPlantingBombActionTrigger();
+    }
   }
 }
 
@@ -195,11 +219,7 @@ char readCharacter()
 void printMainMenu()
 {
   menuLevel = MAIN;
-  display.clear();
-  bigTextLine(F("1.Search &"), 0, 0);
-  bigTextLine(F("  Destroy"), 0, 16);
-  bigTextLine(F(""), 0, 32);
-  bigTextLine(F("2.Sabotage"), 0, 48);
+  displayLinesInDisplay(F("1.Search &"), 0, F("Destroy"), 15, F(""), 50, F("2.Sabotage"), 0);
 }
 
 void bigTextLine(String line, int x, int y)
@@ -243,18 +263,19 @@ void applyMainMenuLevelAction(char action)
     requestDefuseTime();
     triggerGameStart();
     runlevel = PLANTED;
-
-    millisExplosionFinish = (explosionTimeLengthMinutes * 60L * 1000L) + millis();
+    showBombPlantedLinesInDisplay();
     bombBeep = true;
-    explodingTicker.start();
-    beepBombTicker.start();
     audio.play("bombpl-15db.wav");
     delay(1500);
+    millisExplosionFinish = (explosionTimeLengthMinutes * 60L * 1000L) + millis();
+    explodingTicker.start();
+    beepBombTicker.start();
     break;
 
   case '2':
     menuLevel = SABOTAGE;
     requestGameTime();
+    requestPlantingTime();
     requestBombExplosionTime();
     requestDefuseTime();
     triggerGameStart();
@@ -265,52 +286,44 @@ void applyMainMenuLevelAction(char action)
     bombBeep = true;
     updateGameTimeTicker.start();
     beepBombTicker.start();
+    showGameStartedLinesInDisplay();
     break;
   }
 }
 
 void requestGameTime()
 {
-  display.clear();
-  bigTextLine(F("Time Length"), 0, 0);
-  smallTextLine(F("Game length minutes"), 0, 16);
-  smallTextLine(F("#->OK, *-> Cancel"), 0, 16);
+  displayLinesInDisplay(F("Game Length"), 0, F("in minutes?"), 0, F("#-> OK"), 0, F("*-> Cancel"), 0);
   gameLengthMinutes = awaitForInput().toInt();
 }
 
 void requestDefuseTime()
 {
-  display.clear();
-  bigTextLine(F("Defuse?"), 0, 0);
-  smallTextLine(F("Defuse time in seconds"), 0, 16);
-  smallTextLine(F("#->OK, *-> Cancel"), 0, 16);
+  displayLinesInDisplay(F("Defuse time"), 0, F("in seconds?"), 0, F("#-> OK"), 0, F("*-> Cancel"), 0);
   defusingTimeLengthSeconds = awaitForInput().toInt();
+}
+
+void requestPlantingTime()
+{
+  displayLinesInDisplay(F("Bomb Plant"), 0, F("in seconds?"), 0, F("#-> OK"), 0, F("*-> Cancel"), 0);
+  plantingTimeLengthSeconds = awaitForInput().toInt();
 }
 
 void requestDefuseCode()
 {
-  display.clear();
-  bigTextLine(F("Code?"), 0, 0);
-  smallTextLine(F("Defusing code"), 0, 16);
-  smallTextLine(F("#->OK, *-> Cancel"), 0, 16);
+  displayLinesInDisplay(F("Defusing"), 0, F("code?"), 0, F("#-> OK"), 0, F("*-> Cancel"), 0);
   defuseCode = awaitForInput();
 }
 
 void requestBombExplosionTime()
 {
-  display.clear();
-  bigTextLine(F("Bomb time?"), 0, 0);
-  smallTextLine(F("Time to explode"), 0, 16);
-  smallTextLine(F("#->OK, *-> Cancel"), 0, 16);
+  displayLinesInDisplay(F("Bomb time"), 0, F("in minutes?"), 0, F("#-> OK"), 0, F("*-> Cancel"), 0);
   explosionTimeLengthMinutes = awaitForInput().toInt();
 }
 
 void triggerGameStart()
 {
-  display.clear();
-  bigTextLine(F("Start?"), 0, 0);
-  bigTextLine(F("# OK"), 0, 16);
-  bigTextLine(F("* Cancel"), 0, 32);
+  displayLinesInDisplay(F("Start game?"), 0, F(""), 0, F("#-> OK"), 0, F("*-> Cancel"), 0);
   awaitOkCancel();
   countdown();
 
@@ -350,12 +363,12 @@ String awaitForInput()
       {
         Serial.print(F("Input read: "));
         Serial.println(input);
+        clearLedDisplay();
         return input;
       }
 
       input += read;
-      display.clear();
-      bigTextLine(input, 0, 48);
+      displayLedNumber(input.toInt());
     }
   } while (true);
 }
@@ -389,13 +402,14 @@ void countdown()
 
 #endif
 
-  display.clear();
-  int countdownTime = 5000;
+  int countdownTime = 10000;
   int initialMillis = millis();
   int endMillis = initialMillis + countdownTime;
   int displayedSecond = 10;
   int currentSecond;
   boolean finished = false;
+
+  displayLinesInDisplay(F(""), 0, F("Starting"), 10, F("game"), 40, F(""), 0);
   while (!finished)
   {
 
@@ -414,15 +428,14 @@ void countdown()
     if (displayedSecond != currentSecond)
     {
       displayedSecond = currentSecond;
-      display.clear();
-      bigTextLine(F(""), 0, 0);
-      bigTextLine(String(currentSecond), 60, 32);
+      displayLedCountdown(currentSecond);
     }
 
 #if DEBUG
     Serial.print(F("Current second: "));
     Serial.println(currentSecond);
-    Serial.println(currentSecond == 1);
+    Serial.print(F("displayedSecond: "));
+    Serial.println(displayedSecond);
 #endif
 
     if (currentSecond == 0)
@@ -451,7 +464,7 @@ void updateGameTime()
     int timeLeft = (millisGameFinish - millis()) / 1000L;
     if (timeLeft > 0)
     {
-      displayCountdown(timeLeft, F("Game"), 40, F("time"), 40);
+      displayLedCountdown(timeLeft);
     }
     else
     {
@@ -461,25 +474,54 @@ void updateGameTime()
   }
 }
 
-void displayCountdown(int timeLeft, String firstLine, int firstLineX, String secondLine, int secondLineX)
+void displayLinesInDisplay(String firstLine, int firstLineX, String secondLine, int secondLineX, String thirdLine, int thirdLineX, String forthLine, int forthLineX)
 {
   display.clear();
   bigTextLine(firstLine, firstLineX, 0);
   bigTextLine(secondLine, secondLineX, 16);
-  bigTextLine(F(""), 40, 32);
+  bigTextLine(thirdLine, thirdLineX, 32);
+  bigTextLine(forthLine, forthLineX, 48);
+}
 
-  char displayArray[6];
+void displayLedCountdown(int totalSeconds)
+{
+  int minutes = totalSeconds / 60;
+  int seconds = totalSeconds % 60;
 
-  int minutesLeft = timeLeft / 60L;
-  int secondsLeft = timeLeft % 60L;
+  led4DigitDisplay.clearDisplay();
+  led4DigitDisplay.point(1);
+  led4DigitDisplay.display(3, seconds % 10);
+  led4DigitDisplay.display(2, seconds / 10 % 10);
+  led4DigitDisplay.display(1, minutes % 10);
+  led4DigitDisplay.display(0, minutes / 10 % 10);
+}
 
-  sprintf(displayArray, "%02d:%02d", minutesLeft, secondsLeft);
+void displayLedNumber(int number)
+{
+  led4DigitDisplay.clearDisplay();
+  led4DigitDisplay.point(0);
+  led4DigitDisplay.display(3, number % 10);
 
-  bigTextLine(displayArray, 40, 48);
+  if (number > 9)
+  {
+    led4DigitDisplay.display(2, number / 10 % 10);
+  }
 
-#if DEBUG
-  Serial.println(freeMemory(), DEC);
-#endif
+  if (number > 99)
+  {
+    led4DigitDisplay.display(1, number / 100 % 10);
+  }
+
+  if (number > 999)
+  {
+    led4DigitDisplay.display(0, number / 1000 % 10);
+  }
+}
+
+void clearLedDisplay()
+{
+  led4DigitDisplay.point(0);
+  led4DigitDisplay.clearDisplay();
 }
 
 void defusingCallback()
@@ -489,7 +531,7 @@ void defusingCallback()
     int timeLeft = (millisDefuseFinish - millis()) / 1000L;
     if (timeLeft > 0)
     {
-      displayCountdown(timeLeft, F(""), 40, F("Defusing"), 20);
+      displayLedCountdown(timeLeft);
     }
     else
     {
@@ -497,6 +539,42 @@ void defusingCallback()
       delay(250);
       runlevel = DEFUSED; // The game is over
       stopTimers();
+    }
+  }
+}
+
+void plantingCallback()
+{
+  if (runlevel == PLANTING)
+  {
+    int timeLeft = (millisPlantingFinish - millis()) / 1000L;
+
+#if DEBUG
+    Serial.print(F("planting timeleft "));
+    Serial.println(timeLeft);
+    Serial.print(F("millisPlantingFinish  "));
+    Serial.println(millisPlantingFinish);
+#endif
+
+    if (timeLeft > 0)
+    {
+      displayLedCountdown(timeLeft);
+    }
+    else
+    {
+      audio.play("c4_plant-15db.wav");
+      delay(160);
+      runlevel = PLANTED;
+      millisExplosionFinish = millis() + (explosionTimeLengthMinutes * 60L * 1000L);
+      showBombPlantedLinesInDisplay();
+
+#if DEBUG
+      Serial.print(F("millisExplosionFinish "));
+      Serial.println(millisExplosionFinish);
+#endif
+      plantingTicker.stop();
+      explodingTicker.start();
+      audio.play("bombpl-15db.wav");
     }
   }
 }
@@ -531,7 +609,7 @@ void explodingCallback()
 
     if (timeLeft > 0)
     {
-      displayCountdown(timeLeft, F("Explosion"), 20, F("in"), 60);
+      displayLedCountdown(timeLeft);
     }
     else
     {
@@ -548,21 +626,19 @@ void explodingCallback()
 
 void plantBombActionTrigger()
 {
+  if (runlevel == PLAYING)
+  {
 
 #if DEBUG
-  Serial.println(F("Planting"));
+    Serial.println(F("Planting the bomb"));
 #endif
 
-  runlevel = PLANTED;
-  millisExplosionFinish = millis() + (explosionTimeLengthMinutes * 60L * 1000L);
-
-#if DEBUG
-  Serial.print(F("millisExplosionFinish "));
-  Serial.println(millisExplosionFinish);
-#endif
-
-  explodingTicker.start();
-  audio.play("bombpl-15db.wav");
+    runlevel = PLANTING;
+    audio.play("c4_disarm-15db.wav");
+    millisPlantingFinish = millis() + (plantingTimeLengthSeconds * 1000L);
+    plantingTicker.start();
+    displayLinesInDisplay(F("Planting"), 10, F("the bomb"), 20, F("Please"), 30, F("wait"), 40);
+  }
 }
 
 void defusingActionTrigger()
@@ -577,8 +653,24 @@ void defusingActionTrigger()
     runlevel = DEFUSING;
     audio.play("c4_disarm-15db.wav");
     millisDefuseFinish = millis() + (defusingTimeLengthSeconds * 1000L);
+    showDefusingLinesInDisplay();
     defusingTicker.start();
   }
+}
+
+void showDefusingLinesInDisplay()
+{
+  displayLinesInDisplay(F("Defusing"), 15, F("bomb."), 40, F("Please"), 30, F("wait"), 40);
+}
+
+void showBombPlantedLinesInDisplay()
+{
+  displayLinesInDisplay(F("The Bomb "), 15, F("has been"), 15, F("planted"), 15, F(""), 0);
+}
+
+void showGameStartedLinesInDisplay()
+{
+  displayLinesInDisplay(F("Game"), 40, F("running"), 20, F("Plant"), 30, F("the bomb"), 15);
 }
 
 void cancelDefusingActionTrigger()
@@ -591,11 +683,27 @@ void cancelDefusingActionTrigger()
 
     runlevel = PLANTED;
     defusingTicker.stop();
+    showBombPlantedLinesInDisplay();
+  }
+}
+
+void cancelPlantingBombActionTrigger()
+{
+  if (runlevel == PLANTING)
+  {
+#if DEBUG
+    Serial.println(F("Cancel planting"));
+#endif
+
+    runlevel = PLAYING;
+    plantingTicker.stop();
+    showGameStartedLinesInDisplay();
   }
 }
 
 void stopTimers()
 {
+  clearLedDisplay();
   updateGameTimeTicker.stop();
   beepBombTicker.stop();
   defusingTicker.stop();
@@ -620,6 +728,10 @@ void applySabotageMenuLevelAction(char action)
   if (action == 'p')
   {
     plantBombActionTrigger();
+  }
+  else if (action == 'n')
+  {
+    cancelPlantingBombActionTrigger();
   }
   else if (action == 'd')
   {
