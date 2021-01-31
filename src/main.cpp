@@ -6,8 +6,11 @@
 #include "SSD1306AsciiAvrI2c.h"
 #include <Ticker.h>
 #include <TM1637.h>
+#include <Keypad.h>
 
 #define DEBUG true
+#define DISPLAY_CONNECTED true
+#define LED_DISPLAY_CONNECTED true
 
 #if DEBUG
 #include "MemoryFree.h"
@@ -47,7 +50,21 @@ enum Runtime
 #define DEFUSE_BUTTON_PIN A1
 #define PLANT_BUTTON_PIN A2
 
+const byte ROWS = 4; //four rows
+const byte COLS = 3; //three columns
+char keys[ROWS][COLS] = {
+    {'1', '2', '3'},
+    {'4', '5', '6'},
+    {'7', '8', '9'},
+    {'*', '0', '#'}};
+byte rowPins[ROWS] = {15, 8, 7, 6}; //connect to the row pinouts of the keypad
+byte colPins[COLS] = {5, 4, 14};    //connect to the column pinouts of the keypad
+
+Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
+
+#if LED_DISPLAY_CONNECTED
 TM1637 led4DigitDisplay(LED_SCREEN_CLK_PIN, LED_SCREEN_DIO_PIN);
+#endif
 
 TMRpcm audio; // create an object for use in this sketch
 Ticker beepBombTicker(beepBomb, 3000, 0, MILLIS);
@@ -62,10 +79,10 @@ SSD1306AsciiAvrI2c display;
 MenuLevel menuLevel = MAIN;
 Runtime runlevel;
 boolean bombBeep = false;
-int gameLengthMinutes;
-int defusingTimeLengthSeconds;
-int plantingTimeLengthSeconds;
-int explosionTimeLengthMinutes;
+uint8_t gameLengthMinutes;
+uint8_t defusingTimeLengthSeconds;
+uint8_t plantingTimeLengthSeconds;
+uint8_t explosionTimeLengthMinutes;
 String defuseCode;
 
 long millisGameFinish;
@@ -73,25 +90,29 @@ long millisDefuseFinish;
 long millisPlantingFinish;
 long millisExplosionFinish;
 
-int defuseButtonPushed = 0;
-int plantButtonPushed = 0;
+uint8_t defuseButtonPushed = 0;
+uint8_t plantButtonPushed = 0;
 
 void setup()
 {
-  pinMode(LED_BUILTIN, OUTPUT);
-  pinMode(DEFUSE_BUTTON_PIN, INPUT);
-  pinMode(PLANT_BUTTON_PIN, INPUT);
-
 #if DEBUG
   Serial.begin(115200);
   Serial.println(F("Initialisating"));
 #endif
 
+  pinMode(LED_BUILTIN, OUTPUT);
+  pinMode(DEFUSE_BUTTON_PIN, INPUT);
+  pinMode(PLANT_BUTTON_PIN, INPUT);
+
+#if DISPLAY_CONNECTED
   display.begin(&Adafruit128x64, 0x3C);
   display.setFont(Adafruit5x7);
+#endif
 
+#if LED_DISPLAY_CONNECTED
   led4DigitDisplay.set();
   led4DigitDisplay.init();
+#endif
 
 #if DEBUG
   Serial.println(freeMemory(), DEC);
@@ -126,9 +147,10 @@ void setup()
 
 void loop()
 {
-  if (inputAvailable())
+  char read = getInputIfAvailable();
+  if (read != NO_KEY)
   {
-    applyAction(readCharacter());
+    applyAction(read);
   }
 
   updateButtonStatuses();
@@ -173,7 +195,7 @@ void loop()
 void updateButtonStatuses()
 {
 
-  int defuseValue = digitalRead(DEFUSE_BUTTON_PIN);
+  uint8_t defuseValue = digitalRead(DEFUSE_BUTTON_PIN);
   if (defuseValue != defuseButtonPushed)
   {
     defuseButtonPushed = defuseValue;
@@ -188,7 +210,7 @@ void updateButtonStatuses()
     }
   }
 
-  int planting = digitalRead(PLANT_BUTTON_PIN);
+  uint8_t planting = digitalRead(PLANT_BUTTON_PIN);
   if (planting != plantButtonPushed)
   {
     plantButtonPushed = planting;
@@ -204,16 +226,29 @@ void updateButtonStatuses()
   }
 }
 
-boolean inputAvailable()
+char getInputIfAvailable()
 {
-  return Serial.available() > 0;
-}
 
-char readCharacter()
-{
-  char obtained = Serial.read();
-  Serial.print(obtained);
-  return obtained;
+  if (keypad.getKeys())
+  {
+    for (uint8_t i = 0; i < LIST_MAX; i++) // Scan the whole key list.
+    {
+      if (keypad.key[i].stateChanged) // Only find keys that have changed state.
+      {
+        if (keypad.key[i].kstate == PRESSED)
+        {
+#if DEBUG
+          Serial.print("Keypad key pressed: ");
+          Serial.println(keypad.key[i].kchar);
+#endif
+
+          return keypad.key[i].kchar;
+        }
+      }
+    }
+  }
+
+  return NO_KEY;
 }
 
 void printMainMenu()
@@ -222,18 +257,30 @@ void printMainMenu()
   displayLinesInDisplay(F("1.Search &"), 0, F("Destroy"), 15, F(""), 50, F("2.Sabotage"), 0);
 }
 
-void bigTextLine(String line, int x, int y)
+void bigTextLine(String line, uint8_t x, uint8_t y)
 {
+#if DISPLAY_CONNECTED
   display.set2X();
   display.setCursor(x, y);
   display.println(line);
+#endif
+
+#if DEBUG
+  Serial.println(line);
+#endif
 }
 
-void smallTextLine(String line, int x, int y)
+void smallTextLine(String line, uint8_t x, uint8_t y)
 {
+#if DISPLAY_CONNECTED
   display.set1X();
   display.setCursor(x, y);
   display.println(line);
+#endif
+
+#if DEBUG
+  Serial.println(line);
+#endif
 }
 
 void applyAction(char action)
@@ -294,19 +341,19 @@ void applyMainMenuLevelAction(char action)
 void requestGameTime()
 {
   displayLinesInDisplay(F("Game Length"), 0, F("in minutes?"), 0, F("#-> OK"), 0, F("*-> Cancel"), 0);
-  gameLengthMinutes = awaitForInput().toInt();
+  gameLengthMinutes = (uint8_t)awaitForInput().toInt();
 }
 
 void requestDefuseTime()
 {
   displayLinesInDisplay(F("Defuse time"), 0, F("in seconds?"), 0, F("#-> OK"), 0, F("*-> Cancel"), 0);
-  defusingTimeLengthSeconds = awaitForInput().toInt();
+  defusingTimeLengthSeconds = (uint8_t)awaitForInput().toInt();
 }
 
 void requestPlantingTime()
 {
   displayLinesInDisplay(F("Bomb Plant"), 0, F("in seconds?"), 0, F("#-> OK"), 0, F("*-> Cancel"), 0);
-  plantingTimeLengthSeconds = awaitForInput().toInt();
+  plantingTimeLengthSeconds = (uint8_t)awaitForInput().toInt();
 }
 
 void requestDefuseCode()
@@ -318,7 +365,7 @@ void requestDefuseCode()
 void requestBombExplosionTime()
 {
   displayLinesInDisplay(F("Bomb time"), 0, F("in minutes?"), 0, F("#-> OK"), 0, F("*-> Cancel"), 0);
-  explosionTimeLengthMinutes = awaitForInput().toInt();
+  explosionTimeLengthMinutes = (uint8_t)awaitForInput().toInt();
 }
 
 void triggerGameStart()
@@ -349,11 +396,10 @@ String awaitForInput()
   String input;
   do
   {
-
-    if (inputAvailable())
+    char read = getInputIfAvailable();
+    if (read != NO_KEY)
     {
       audio.play("nvg_off-15db.wav");
-      char read = readCharacter();
 
       if (read == '*')
       {
@@ -368,8 +414,9 @@ String awaitForInput()
       }
 
       input += read;
-      displayLedNumber(input.toInt());
+      displayLedNumber((uint8_t)input.toInt());
     }
+
   } while (true);
 }
 
@@ -377,10 +424,10 @@ void awaitOkCancel()
 {
   do
   {
-    if (inputAvailable())
+    char read = getInputIfAvailable();
+    if (read != NO_KEY)
     {
       audio.play("nvg_off-15db.wav");
-      char read = readCharacter();
 
       if (read == '*')
       {
@@ -391,6 +438,7 @@ void awaitOkCancel()
         return;
       }
     }
+
   } while (true);
 }
 
@@ -402,11 +450,11 @@ void countdown()
 
 #endif
 
-  int countdownTime = 10000;
-  int initialMillis = millis();
-  int endMillis = initialMillis + countdownTime;
-  int displayedSecond = 10;
-  int currentSecond;
+  uint8_t countdownTime = 10000;
+  unsigned long initialMillis = millis();
+  unsigned long endMillis = initialMillis + countdownTime;
+  uint8_t displayedSecond = 10;
+  uint8_t currentSecond;
   boolean finished = false;
 
   displayLinesInDisplay(F(""), 0, F("Starting"), 10, F("game"), 40, F(""), 0);
@@ -444,7 +492,10 @@ void countdown()
     }
   }
 
+#if DISPLAY_CONNECTED
   display.clear();
+#endif
+
   bigTextLine(F(""), 0, 0);
   bigTextLine(F("GO!"), 55, 32);
 }
@@ -461,7 +512,7 @@ void updateGameTime()
 {
   if (runlevel == PLAYING)
   {
-    int timeLeft = (millisGameFinish - millis()) / 1000L;
+    unsigned long timeLeft = (millisGameFinish - millis()) / 1000L;
     if (timeLeft > 0)
     {
       displayLedCountdown(timeLeft);
@@ -474,30 +525,44 @@ void updateGameTime()
   }
 }
 
-void displayLinesInDisplay(String firstLine, int firstLineX, String secondLine, int secondLineX, String thirdLine, int thirdLineX, String forthLine, int forthLineX)
+void displayLinesInDisplay(String firstLine, uint8_t firstLineX, String secondLine, uint8_t secondLineX, String thirdLine, uint8_t thirdLineX, String forthLine, uint8_t forthLineX)
 {
+#if DISPLAY_CONNECTED
   display.clear();
+#endif
+
   bigTextLine(firstLine, firstLineX, 0);
   bigTextLine(secondLine, secondLineX, 16);
   bigTextLine(thirdLine, thirdLineX, 32);
   bigTextLine(forthLine, forthLineX, 48);
 }
 
-void displayLedCountdown(int totalSeconds)
+void displayLedCountdown(uint8_t totalSeconds)
 {
-  int minutes = totalSeconds / 60;
-  int seconds = totalSeconds % 60;
+  uint8_t minutes = totalSeconds / 60;
+  uint8_t seconds = totalSeconds % 60;
 
+#if DEBUG
+  Serial.print("Led countdown: ");
+  Serial.print(minutes);
+  Serial.print(":");
+  Serial.println(seconds);
+#endif
+
+#if LED_DISPLAY_CONNECTED
   led4DigitDisplay.clearDisplay();
   led4DigitDisplay.point(1);
   led4DigitDisplay.display(3, seconds % 10);
   led4DigitDisplay.display(2, seconds / 10 % 10);
   led4DigitDisplay.display(1, minutes % 10);
   led4DigitDisplay.display(0, minutes / 10 % 10);
+#endif
 }
 
-void displayLedNumber(int number)
+void displayLedNumber(uint8_t number)
 {
+
+#if LED_DISPLAY_CONNECTED
   led4DigitDisplay.clearDisplay();
   led4DigitDisplay.point(0);
   led4DigitDisplay.display(3, number % 10);
@@ -516,19 +581,28 @@ void displayLedNumber(int number)
   {
     led4DigitDisplay.display(0, number / 1000 % 10);
   }
+
+#endif
+
+#if DEBUG
+  Serial.print("Led number: ");
+  Serial.println(number);
+#endif
 }
 
 void clearLedDisplay()
 {
+#if LED_DISPLAY_CONNECTED
   led4DigitDisplay.point(0);
   led4DigitDisplay.clearDisplay();
+#endif
 }
 
 void defusingCallback()
 {
   if (runlevel == DEFUSING)
   {
-    int timeLeft = (millisDefuseFinish - millis()) / 1000L;
+    unsigned long timeLeft = (millisDefuseFinish - millis()) / 1000L;
     if (timeLeft > 0)
     {
       displayLedCountdown(timeLeft);
@@ -547,7 +621,7 @@ void plantingCallback()
 {
   if (runlevel == PLANTING)
   {
-    int timeLeft = (millisPlantingFinish - millis()) / 1000L;
+    unsigned long timeLeft = (millisPlantingFinish - millis()) / 1000L;
 
 #if DEBUG
     Serial.print(F("planting timeleft "));
