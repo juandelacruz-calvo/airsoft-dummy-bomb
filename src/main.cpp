@@ -8,9 +8,10 @@
 #include <TM1637.h>
 #include <Keypad.h>
 
-#define DEBUG true
+#define DEBUG false
 #define DISPLAY_CONNECTED true
 #define LED_DISPLAY_CONNECTED true
+#define SD_CARD_CONNECTED true
 
 #if DEBUG
 #include "MemoryFree.h"
@@ -43,12 +44,14 @@ enum Runtime
 
 #define SDFAT_FILE_TYPE 3
 
-#define SD_CHIP_SELECT_PIN 10
-#define SPEAKER_PIN 9
-#define LED_SCREEN_CLK_PIN 2
-#define LED_SCREEN_DIO_PIN 3
-#define DEFUSE_BUTTON_PIN A1
-#define PLANT_BUTTON_PIN A2
+#define SPEAKER_PIN 46
+#define LED_SCREEN_CLK_PIN 48
+#define LED_SCREEN_DIO_PIN 49
+#define DEFUSE_BUTTON_PIN A6
+#define PLANT_BUTTON_PIN A7
+#define ELECTRIC_EXPLOSION_RELAY 39
+
+// const char NO_KEY = '\0';
 
 const byte ROWS = 4; //four rows
 const byte COLS = 3; //three columns
@@ -57,8 +60,8 @@ char keys[ROWS][COLS] = {
     {'4', '5', '6'},
     {'7', '8', '9'},
     {'*', '0', '#'}};
-byte rowPins[ROWS] = {15, 8, 7, 6}; //connect to the row pinouts of the keypad
-byte colPins[COLS] = {5, 4, 14};    //connect to the column pinouts of the keypad
+byte rowPins[ROWS] = {41, 38, 42, 40}; //connect to the row pinouts of the keypad
+byte colPins[COLS] = {47, 45, 43};     //connect to the column pinouts of the keypad
 
 Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
 
@@ -92,9 +95,12 @@ long millisExplosionFinish;
 
 uint8_t defuseButtonPushed = 0;
 uint8_t plantButtonPushed = 0;
+boolean sdCardInitiated = false;
 
 void setup()
 {
+  blink(1, 150);
+  pinMode(LED_BUILTIN, OUTPUT);
 #if DEBUG
   Serial.begin(115200);
   Serial.println(F("Initialisating"));
@@ -103,11 +109,17 @@ void setup()
   pinMode(LED_BUILTIN, OUTPUT);
   pinMode(DEFUSE_BUTTON_PIN, INPUT);
   pinMode(PLANT_BUTTON_PIN, INPUT);
+  pinMode(ELECTRIC_EXPLOSION_RELAY, OUTPUT);
+
+  digitalWrite(ELECTRIC_EXPLOSION_RELAY, LOW);
 
 #if DISPLAY_CONNECTED
   display.begin(&Adafruit128x64, 0x3C);
   display.setFont(Adafruit5x7);
 #endif
+
+  initSdCard();
+  audio.speakerPin = SPEAKER_PIN;
 
 #if LED_DISPLAY_CONNECTED
   led4DigitDisplay.set();
@@ -115,33 +127,16 @@ void setup()
 #endif
 
 #if DEBUG
+  Serial.print(F("Free memory: "));
   Serial.println(freeMemory(), DEC);
 #endif
-
-  audio.speakerPin = SPEAKER_PIN;
-
-  if (!sd.begin(SD_CHIP_SELECT_PIN))
-  {
-
-#if DEBUG
-    Serial.println(F("SD error"));
-#endif
-
-    return;
-  }
-  else
-  {
-
-#if DEBUG
-    Serial.println(F("SD OK"));
-#endif
-  }
 
 #if DEBUG
   Serial.println(freeMemory(), DEC);
 #endif
 
-  audio.play("enemydown-15db.wav");
+  delay(150);
+  playSound("enemydown-15db.wav");
   printMainMenu();
 }
 
@@ -150,10 +145,11 @@ void loop()
   char read = getInputIfAvailable();
   if (read != NO_KEY)
   {
+    Serial.print(read);
     applyAction(read);
   }
 
-  updateButtonStatuses();
+  // updateButtonStatuses();
 
   beepBombTicker.update();
   updateGameTimeTicker.update();
@@ -163,7 +159,6 @@ void loop()
 
   switch (runlevel)
   {
-
   case TIME_OVER:
 
     displayLinesInDisplay(F(""), 0, F("TIME OVER"), 10, F(""), 20, F(""), 30);
@@ -174,22 +169,48 @@ void loop()
   case DEFUSED:
 
     displayLinesInDisplay(F(""), 0, F("Counter"), 30, F("WIN"), 50, F(""), 30);
-    audio.play("bombdef-15db.wav");
+    playSound("bombdef-15db.wav");
     delay(2500);
-    audio.play("ctwin-15.wav");
+    playSound("ctwin-15.wav");
 
     runlevel = END;
     break;
 
   case EXPLODED:
+    digitalWrite(ELECTRIC_EXPLOSION_RELAY, HIGH);
     displayLinesInDisplay(F(""), 0, F("Terrorist"), 10, F("WIN"), 50, F(""), 30);
-    audio.play("new_bomb_explosion-5db.wav");
+    playSound("new_bomb_explosion-5db.wav");
     delay(3000);
-    audio.play("terwin-15.wav");
+    playSound("terwin-15.wav");
 
     runlevel = END;
     break;
   }
+}
+
+void initSdCard()
+{
+
+#if SD_CARD_CONNECTED
+
+  if (!sd.begin(SS))
+  {
+    blink(3, 150);
+#if DEBUG
+    Serial.println(F("SD error"));
+
+#endif
+    return;
+  }
+  else
+  {
+#if DEBUG
+    Serial.println(F("SD OK"));
+#endif
+    sdCardInitiated = true;
+  }
+
+#endif
 }
 
 void updateButtonStatuses()
@@ -228,6 +249,13 @@ void updateButtonStatuses()
 
 char getInputIfAvailable()
 {
+  // if (Serial.available() > 0)
+  // {
+  //   char read = Serial.read();
+  //   Serial.print("Keypad key pressed: ");
+  //   Serial.println(read);
+  //   return read;
+  // }
 
   if (keypad.getKeys())
   {
@@ -285,7 +313,13 @@ void smallTextLine(String line, uint8_t x, uint8_t y)
 
 void applyAction(char action)
 {
-  audio.play("nvg_off-15db.wav");
+
+#if DEBUG
+  Serial.print("Applying action: ");
+  Serial.println(action);
+#endif
+
+  playSound("nvg_off-15db.wav");
   switch (menuLevel)
   {
   case MAIN:
@@ -312,7 +346,7 @@ void applyMainMenuLevelAction(char action)
     runlevel = PLANTED;
     showBombPlantedLinesInDisplay();
     bombBeep = true;
-    audio.play("bombpl-15db.wav");
+    playSound("bombpl-15db.wav");
     delay(1500);
     millisExplosionFinish = (explosionTimeLengthMinutes * 60L * 1000L) + millis();
     explodingTicker.start();
@@ -388,7 +422,7 @@ void triggerGameStart()
 
 #endif
 
-  audio.play("com_go-15.wav");
+  playSound("com_go-15.wav");
 }
 
 String awaitForInput()
@@ -399,7 +433,7 @@ String awaitForInput()
     char read = getInputIfAvailable();
     if (read != NO_KEY)
     {
-      audio.play("nvg_off-15db.wav");
+      playSound("nvg_off-15db.wav");
 
       if (read == '*')
       {
@@ -414,7 +448,7 @@ String awaitForInput()
       }
 
       input += read;
-      displayLedNumber((uint8_t)input.toInt());
+      displayLedNumber(input.toFloat());
     }
 
   } while (true);
@@ -427,7 +461,7 @@ void awaitOkCancel()
     char read = getInputIfAvailable();
     if (read != NO_KEY)
     {
-      audio.play("nvg_off-15db.wav");
+      playSound("nvg_off-15db.wav");
 
       if (read == '*')
       {
@@ -450,7 +484,7 @@ void countdown()
 
 #endif
 
-  uint8_t countdownTime = 10000;
+  unsigned long countdownTime = 10000;
   unsigned long initialMillis = millis();
   unsigned long endMillis = initialMillis + countdownTime;
   uint8_t displayedSecond = 10;
@@ -543,9 +577,9 @@ void displayLedCountdown(uint8_t totalSeconds)
   uint8_t seconds = totalSeconds % 60;
 
 #if DEBUG
-  Serial.print("Led countdown: ");
+  Serial.print(F("Led countdown: "));
   Serial.print(minutes);
-  Serial.print(":");
+  Serial.print(F(":"));
   Serial.println(seconds);
 #endif
 
@@ -559,7 +593,7 @@ void displayLedCountdown(uint8_t totalSeconds)
 #endif
 }
 
-void displayLedNumber(uint8_t number)
+void displayLedNumber(long number)
 {
 
 #if LED_DISPLAY_CONNECTED
@@ -585,7 +619,7 @@ void displayLedNumber(uint8_t number)
 #endif
 
 #if DEBUG
-  Serial.print("Led number: ");
+  Serial.print(F("Led number: "));
   Serial.println(number);
 #endif
 }
@@ -609,7 +643,7 @@ void defusingCallback()
     }
     else
     {
-      audio.play("c4_disarmed-15db.wav");
+      playSound("c4_disarmed-15db.wav");
       delay(250);
       runlevel = DEFUSED; // The game is over
       stopTimers();
@@ -636,7 +670,7 @@ void plantingCallback()
     }
     else
     {
-      audio.play("c4_plant-15db.wav");
+      playSound("c4_plant-15db.wav");
       delay(160);
       runlevel = PLANTED;
       millisExplosionFinish = millis() + (explosionTimeLengthMinutes * 60L * 1000L);
@@ -648,7 +682,7 @@ void plantingCallback()
 #endif
       plantingTicker.stop();
       explodingTicker.start();
-      audio.play("bombpl-15db.wav");
+      playSound("bombpl-15db.wav");
     }
   }
 }
@@ -708,7 +742,7 @@ void plantBombActionTrigger()
 #endif
 
     runlevel = PLANTING;
-    audio.play("c4_disarm-15db.wav");
+    playSound("c4_disarm-15db.wav");
     millisPlantingFinish = millis() + (plantingTimeLengthSeconds * 1000L);
     plantingTicker.start();
     displayLinesInDisplay(F("Planting"), 10, F("the bomb"), 20, F("Please"), 30, F("wait"), 40);
@@ -725,7 +759,7 @@ void defusingActionTrigger()
 #endif
 
     runlevel = DEFUSING;
-    audio.play("c4_disarm-15db.wav");
+    playSound("c4_disarm-15db.wav");
     millisDefuseFinish = millis() + (defusingTimeLengthSeconds * 1000L);
     showDefusingLinesInDisplay();
     defusingTicker.start();
@@ -814,5 +848,27 @@ void applySabotageMenuLevelAction(char action)
   else if (action == 'c')
   {
     cancelDefusingActionTrigger();
+  }
+}
+
+void playSound(char *sound)
+{
+#if SD_CARD_CONNECTED
+  if (!sdCardInitiated)
+  {
+    initSdCard();
+  }
+  audio.play(sound);
+#endif
+}
+
+void blink(int times, int delayTime)
+{
+  for (int i = 0; i < times; i++)
+  {
+    digitalWrite(LED_BUILTIN, HIGH);
+    delay(delayTime);
+    digitalWrite(LED_BUILTIN, LOW);
+    delay(delayTime);
   }
 }

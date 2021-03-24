@@ -32,7 +32,10 @@ void showDefusingLinesInDisplay();
 void showBombPlantedLinesInDisplay();
 void showGameStartedLinesInDisplay();
 void displayLedCountdown(uint8_t totalSeconds);
-void displayLedNumber(uint8_t number);
+void displayLedNumber(long number);
 void clearLedDisplay();
 void updateButtonStatuses();
+void playSound(char* sound);
+void blink(int times, int delay);
+void initSdCard();
 void (*resetFunc)(void) = 0; // Reset Arduino
