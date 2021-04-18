@@ -22,6 +22,8 @@ void updateGameTime();
 void defusingCallback();
 void plantingCallback();
 void explodingCallback();
+void bombLedCallback();
+void defuseLedCallback();
 void plantBombActionTrigger();
 void cancelPlantingBombActionTrigger();
 void cancelDefusingActionTrigger();
@@ -31,7 +33,7 @@ void displayLinesInDisplay(String firstLine, uint8_t firstLineX, String secondLi
 void showDefusingLinesInDisplay();
 void showBombPlantedLinesInDisplay();
 void showGameStartedLinesInDisplay();
-void displayLedCountdown(uint8_t totalSeconds);
+void displayLedCountdown(long totalSeconds);
 void displayLedNumber(long number);
 void clearLedDisplay();
 void updateButtonStatuses();

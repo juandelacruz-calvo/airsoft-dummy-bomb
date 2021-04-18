@@ -8,7 +8,7 @@
 #include <TM1637.h>
 #include <Keypad.h>
 
-#define DEBUG false
+#define DEBUG true
 #define DISPLAY_CONNECTED true
 #define LED_DISPLAY_CONNECTED true
 #define SD_CARD_CONNECTED true
@@ -32,6 +32,7 @@ enum MenuLevel
 
 enum Runtime
 {
+  SETTINGS,
   PLAYING,
   PLANTING,
   PLANTED,
@@ -47,9 +48,12 @@ enum Runtime
 #define SPEAKER_PIN 46
 #define LED_SCREEN_CLK_PIN 48
 #define LED_SCREEN_DIO_PIN 49
-#define DEFUSE_BUTTON_PIN A6
-#define PLANT_BUTTON_PIN A7
-#define ELECTRIC_EXPLOSION_RELAY 39
+
+#define ELECTRIC_EXPLOSION_RELAY_PIN 39
+#define DEFUSE_BUTTON_PIN A1
+#define PLANT_BUTTON_PIN A0
+#define DEFUSE_BUTTON_LED_PIN 37
+#define PLANT_BUTTON_LED_PIN 36
 
 // const char NO_KEY = '\0';
 
@@ -75,6 +79,8 @@ Ticker updateGameTimeTicker(updateGameTime, 1000, 0, MILLIS);
 Ticker defusingTicker(defusingCallback, 1000, 0, MILLIS);
 Ticker plantingTicker(plantingCallback, 1000, 0, MILLIS);
 Ticker explodingTicker(explodingCallback, 1000, 0, MILLIS);
+Ticker bombLedTicker(bombLedCallback, 250, 0, MILLIS);
+Ticker defuseLedTicker(defuseLedCallback, 250, 0, MILLIS);
 
 // Declaration for an SSD1306 display connected to I2C (SDA, SCL pins)
 SSD1306AsciiAvrI2c display;
@@ -97,23 +103,34 @@ uint8_t defuseButtonPushed = 0;
 uint8_t plantButtonPushed = 0;
 boolean sdCardInitiated = false;
 
+boolean plantButtonLedOn = false;
+boolean defuseButtonLedOn = false;
+
 void setup()
 {
   blink(1, 150);
   pinMode(LED_BUILTIN, OUTPUT);
 #if DEBUG
   Serial.begin(115200);
-  Serial.println(F("Initialisating"));
+  Serial.println(F("Setup"));
 #endif
 
   pinMode(LED_BUILTIN, OUTPUT);
   pinMode(DEFUSE_BUTTON_PIN, INPUT);
   pinMode(PLANT_BUTTON_PIN, INPUT);
-  pinMode(ELECTRIC_EXPLOSION_RELAY, OUTPUT);
+  pinMode(DEFUSE_BUTTON_LED_PIN, OUTPUT);
+  pinMode(PLANT_BUTTON_LED_PIN, OUTPUT);
+  pinMode(ELECTRIC_EXPLOSION_RELAY_PIN, OUTPUT);
 
-  digitalWrite(ELECTRIC_EXPLOSION_RELAY, LOW);
+  digitalWrite(ELECTRIC_EXPLOSION_RELAY_PIN, LOW);
 
 #if DISPLAY_CONNECTED
+
+#if DEBUG
+  Serial.begin(115200);
+  Serial.println(F("Display setup"));
+#endif
+
   display.begin(&Adafruit128x64, 0x3C);
   display.setFont(Adafruit5x7);
 #endif
@@ -122,6 +139,12 @@ void setup()
   audio.speakerPin = SPEAKER_PIN;
 
 #if LED_DISPLAY_CONNECTED
+
+#if DEBUG
+  Serial.begin(115200);
+  Serial.println(F("4 Digit LED setup"));
+#endif
+
   led4DigitDisplay.set();
   led4DigitDisplay.init();
 #endif
@@ -131,12 +154,9 @@ void setup()
   Serial.println(freeMemory(), DEC);
 #endif
 
-#if DEBUG
-  Serial.println(freeMemory(), DEC);
-#endif
-
   delay(150);
   playSound("enemydown-15db.wav");
+  runlevel = SETTINGS;
   printMainMenu();
 }
 
@@ -149,25 +169,27 @@ void loop()
     applyAction(read);
   }
 
-  // updateButtonStatuses();
+  updateButtonStatuses();
 
   beepBombTicker.update();
   updateGameTimeTicker.update();
   defusingTicker.update();
   explodingTicker.update();
   plantingTicker.update();
+  bombLedTicker.update();
+  defuseLedTicker.update();
 
   switch (runlevel)
   {
   case TIME_OVER:
 
     displayLinesInDisplay(F(""), 0, F("TIME OVER"), 10, F(""), 20, F(""), 30);
-
+    delay(2500);
+    playSound("ctwin-15.wav");
     runlevel = END;
     break;
 
   case DEFUSED:
-
     displayLinesInDisplay(F(""), 0, F("Counter"), 30, F("WIN"), 50, F(""), 30);
     playSound("bombdef-15db.wav");
     delay(2500);
@@ -177,13 +199,18 @@ void loop()
     break;
 
   case EXPLODED:
-    digitalWrite(ELECTRIC_EXPLOSION_RELAY, HIGH);
+    digitalWrite(ELECTRIC_EXPLOSION_RELAY_PIN, HIGH);
     displayLinesInDisplay(F(""), 0, F("Terrorist"), 10, F("WIN"), 50, F(""), 30);
     playSound("new_bomb_explosion-5db.wav");
     delay(3000);
     playSound("terwin-15.wav");
 
     runlevel = END;
+    break;
+
+  case END:
+    digitalWrite(PLANT_BUTTON_LED_PIN, LOW);
+    digitalWrite(DEFUSE_BUTTON_LED_PIN, LOW);
     break;
   }
 }
@@ -192,6 +219,11 @@ void initSdCard()
 {
 
 #if SD_CARD_CONNECTED
+
+#if DEBUG
+  Serial.begin(115200);
+  Serial.println(F("SD card setup"));
+#endif
 
   if (!sd.begin(SS))
   {
@@ -204,9 +236,7 @@ void initSdCard()
   }
   else
   {
-#if DEBUG
-    Serial.println(F("SD OK"));
-#endif
+
     sdCardInitiated = true;
   }
 
@@ -408,6 +438,9 @@ void triggerGameStart()
   awaitOkCancel();
   countdown();
 
+  bombLedTicker.start();
+  defuseLedTicker.start();
+
 #if DEBUG
   Serial.println(freeMemory(), DEC);
 
@@ -433,6 +466,7 @@ String awaitForInput()
     char read = getInputIfAvailable();
     if (read != NO_KEY)
     {
+
       playSound("nvg_off-15db.wav");
 
       if (read == '*')
@@ -441,14 +475,19 @@ String awaitForInput()
       }
       else if (read == '#')
       {
-        Serial.print(F("Input read: "));
-        Serial.println(input);
-        clearLedDisplay();
-        return input;
+        if (input.length() > 0)
+        {
+          Serial.print(F("Input read: "));
+          Serial.println(input);
+          clearLedDisplay();
+          return input;
+        }
       }
-
-      input += read;
-      displayLedNumber(input.toFloat());
+      else
+      {
+        input += read;
+        displayLedNumber(input.toFloat());
+      }
     }
 
   } while (true);
@@ -500,11 +539,6 @@ void countdown()
       return;
     }
 
-#if DEBUG
-    Serial.print(F("millis "));
-    Serial.println(millis());
-#endif
-
     int currentSecond = (endMillis - millis()) / 1000;
 
     if (displayedSecond != currentSecond)
@@ -512,13 +546,6 @@ void countdown()
       displayedSecond = currentSecond;
       displayLedCountdown(currentSecond);
     }
-
-#if DEBUG
-    Serial.print(F("Current second: "));
-    Serial.println(currentSecond);
-    Serial.print(F("displayedSecond: "));
-    Serial.println(displayedSecond);
-#endif
 
     if (currentSecond == 0)
     {
@@ -547,6 +574,16 @@ void updateGameTime()
   if (runlevel == PLAYING)
   {
     unsigned long timeLeft = (millisGameFinish - millis()) / 1000L;
+
+#if DEBUG
+    Serial.print(F("timeLeft: "));
+    Serial.print(timeLeft);
+    Serial.print(F("millisGameFinish:"));
+    Serial.println(millisGameFinish);
+    Serial.print(F(" millis():"));
+    Serial.println(millis());
+#endif
+
     if (timeLeft > 0)
     {
       displayLedCountdown(timeLeft);
@@ -571,7 +608,7 @@ void displayLinesInDisplay(String firstLine, uint8_t firstLineX, String secondLi
   bigTextLine(forthLine, forthLineX, 48);
 }
 
-void displayLedCountdown(uint8_t totalSeconds)
+void displayLedCountdown(long totalSeconds)
 {
   uint8_t minutes = totalSeconds / 60;
   uint8_t seconds = totalSeconds % 60;
@@ -732,10 +769,61 @@ void explodingCallback()
   }
 }
 
+void bombLedCallback()
+{
+  if (runlevel == PLAYING)
+  {
+
+    if (plantButtonLedOn)
+    {
+      digitalWrite(PLANT_BUTTON_LED_PIN, HIGH);
+#if DEBUG
+      //Serial.println(F("bombLedCallback On"));
+#endif
+    }
+    else
+    {
+      digitalWrite(PLANT_BUTTON_LED_PIN, LOW);
+#if DEBUG
+      //Serial.println(F("bombLedCallback Off"));
+#endif
+    }
+
+    plantButtonLedOn = !plantButtonLedOn;
+  }
+}
+
+void defuseLedCallback()
+{
+  if (runlevel == PLANTED)
+  {
+
+    if (defuseButtonLedOn)
+    {
+#if DEBUG
+      //Serial.println(F("defuseLedCallback ON"));
+#endif
+      digitalWrite(DEFUSE_BUTTON_LED_PIN, HIGH);
+    }
+    else
+    {
+#if DEBUG
+      //Serial.println(F("defuseLedCallback Off"));
+#endif
+
+      digitalWrite(DEFUSE_BUTTON_LED_PIN, LOW);
+    }
+
+    defuseButtonLedOn = !defuseButtonLedOn;
+  }
+}
+
 void plantBombActionTrigger()
 {
   if (runlevel == PLAYING)
   {
+    digitalWrite(PLANT_BUTTON_LED_PIN, HIGH);
+    plantButtonLedOn = true;
 
 #if DEBUG
     Serial.println(F("Planting the bomb"));
@@ -753,6 +841,8 @@ void defusingActionTrigger()
 {
   if (runlevel == PLANTED)
   {
+    digitalWrite(DEFUSE_BUTTON_LED_PIN, HIGH);
+    defuseButtonLedOn = true;
 
 #if DEBUG
     Serial.println(F("Defusing"));
@@ -785,6 +875,8 @@ void cancelDefusingActionTrigger()
 {
   if (runlevel == DEFUSING)
   {
+    digitalWrite(DEFUSE_BUTTON_LED_PIN, LOW);
+    defuseButtonLedOn = false;
 #if DEBUG
     Serial.println(F("Cancel defusing"));
 #endif
@@ -799,6 +891,8 @@ void cancelPlantingBombActionTrigger()
 {
   if (runlevel == PLANTING)
   {
+    digitalWrite(PLANT_BUTTON_LED_PIN, LOW);
+    plantButtonLedOn = false;
 #if DEBUG
     Serial.println(F("Cancel planting"));
 #endif
