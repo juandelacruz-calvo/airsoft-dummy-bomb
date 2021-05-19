@@ -563,7 +563,9 @@ void countdown()
 
 void beepBomb()
 {
-  if (bombBeep && runlevel == PLANTED)
+  if (bombBeep && 
+  (runlevel == PLANTED 
+  || (menuLevel == SABOTAGE && runlevel == PLAYING)))
   {
     tone(SPEAKER_PIN, 4186, 120); // C8
   }
